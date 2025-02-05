@@ -9,6 +9,7 @@ import glob
 import os
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import seaborn as sns
 
 def parse_time_frame(time_frame):
     # Extract date and time parts
@@ -197,6 +198,51 @@ def plot_2D_dts_colormap(xr_data, meteo_df, time_slice, x_slice, vmin=None, vmax
     if save_fp:
         plt.savefig(save_fp, dpi=300)
 
+    plt.show()
+
+def plot_dts_meteo_distributions(xr_data, meteo_df, time_slice, x_slice, save_fp=None):
+
+    # Filter the meteo DataFrame to match the time slice
+    meteo_filtered = meteo_df.loc[time_slice]
+
+    # Create subplots with adjusted width for the second and third subplots
+    fig, axes = plt.subplots(1, 3, figsize=(15, 6), gridspec_kw={'width_ratios': [3, 0.3, 0.3]})
+
+    # First plot: Temperature along the stream (from xarray)
+    for time in xr_data.sel(time=time_slice)['time']:
+        xr_data['T'].sel(time=time).plot(ax=axes[0], alpha=0.2, color='tab:blue')
+
+    axes[0].set_title(f'Stream Temperature {time_slice.start} (°C)')
+    axes[0].set_xlabel('Distance Along Stream (m)')
+    axes[0].set_ylabel('Temperature (°C)')
+
+    # Set the same y-limits for both subplots
+    y_min = min(xr_data['T'].sel(time=time_slice).min(), meteo_filtered['Lompolo'].min(), meteo_filtered['Kenttarova'].min())
+    y_max = max(xr_data['T'].sel(time=time_slice).max(), meteo_filtered['Lompolo'].max(), meteo_filtered['Kenttarova'].max())
+
+    axes[0].set_ylim(y_min, y_max)
+    axes[1].set_ylim(y_min, y_max)
+    axes[2].set_ylim(y_min, y_max)
+
+    # Second plot: Boxplot for temperature variation (from meteo) for Lompolo
+    sns.boxplot(data=meteo_filtered, y='Lompolo', ax=axes[1], color='tab:blue')
+
+    axes[1].set_title('T range (°C)\nat Lompolo')
+    axes[1].set_xlabel('')
+    axes[1].set_ylabel('')  # Hide y-axis title
+    axes[1].set_yticks([])  # Hide y-axis ticks and labels
+
+    # Third plot: Boxplot for temperature variation (from meteo) for Kenttarova
+    sns.boxplot(data=meteo_filtered, y='Kenttarova', ax=axes[2], color='tab:blue')
+
+    axes[2].set_title('T range (°C)\nat Kenttarova')
+    axes[2].set_xlabel('')
+    axes[2].set_ylabel('')  # Hide y-axis title
+    axes[2].set_yticks([])  # Hide y-axis ticks and labels
+
+    # Show the plot
+    plt.subplots_adjust(wspace=0.05, hspace=0.05)
+    #plt.savefig('FIGS/temp_dist_summer.png', dpi=300)
     plt.show()
 
 
