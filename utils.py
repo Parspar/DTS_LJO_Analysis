@@ -10,6 +10,68 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
+import sys
+
+def convert_ddf_to_monthly_csv(in_directory, out_directory, dates_from_filenames=True):
+    """
+    Converts .ddf files from a given directory into monthly CSV files.
+
+    Parameters:
+    - in_directory: str, path to the input directory containing .ddf files.
+    - out_directory: str, path to the output directory where CSVs will be saved.
+    - dates_from_filenames: bool, if True, extracts date from filenames, otherwise from file headers.
+    """
+
+    folder = os.path.join(in_directory, "*", "*", "**", "*.ddf")  # Include all years and months
+    file_paths = glob.glob(folder, recursive=True)
+
+    # Dictionary to store DataFrames grouped by (year, month)
+    monthly_dfs = {}
+
+    # Loop through each file path
+    for file_path in file_paths:
+        # Extract year and month from the file path
+        parts = file_path.split(os.sep)
+        year, month = parts[-3], parts[-2]  # Adjust based on folder structure
+
+        # Read the .ddf file (skip header)
+        df = pd.read_csv(file_path, encoding='latin-1', sep='\t', skiprows=25)
+
+        if dates_from_filenames:
+            # Extract time information from the file path
+            parts = file_path.split(' ')
+            time_frame = parts[-3] + ' ' + parts[-1].split('.')[0]  # Adjust indices as needed
+        else:
+            # Extract time from the file header
+            with open(file_path, 'r', encoding='latin-1') as f:
+                header_lines = [next(f).strip().split('\t') for _ in range(25)]
+            
+            header_dict = {line[0].strip(): line[1].strip() if len(line) > 1 else None for line in header_lines}
+            date = header_dict.get('date', 'unknown').replace('/', '-')  # YYYY/MM/DD → YYYY-MM-DD
+            time = header_dict.get('time', 'unknown')
+            time_frame = f"{date} {time}"  # Format: YYYY-MM-DD HH:MM:SS
+
+        # Add time_frame column
+        df['time_frame'] = time_frame
+
+        # Store in dictionary grouped by (year, month)
+        key = (year, month)
+        if key in monthly_dfs:
+            monthly_dfs[key].append(df)
+        else:
+            monthly_dfs[key] = [df]
+
+    # Ensure output directory exists
+    os.makedirs(out_directory, exist_ok=True)
+
+    # Process and save each month's data separately
+    for (year, month), dfs in monthly_dfs.items():
+        combined_df = pd.concat(dfs, ignore_index=True)
+        output_filename = f"channel 1 dts {month} {year}.csv"
+        output_path = os.path.join(out_directory, output_filename)
+        
+        combined_df.to_csv(output_path, index=False)
+        print(f"Saved: {output_path}")
 
 def parse_time_frame(time_frame):
     # Extract date and time parts
@@ -19,7 +81,7 @@ def parse_time_frame(time_frame):
     
     return pd.to_datetime(date_part, format='%Y%m%d') + time_part_in_minutes
 
-def read_and_combine_dts_files(directory):
+def read_and_combine_dts_files(directory, dates_from_filenames=True):
     csv_files = glob.glob(os.path.join(directory, '*.csv'))
 
     # Initialize an empty list to store DataFrames
@@ -28,18 +90,24 @@ def read_and_combine_dts_files(directory):
     # Process each CSV file
     for file in csv_files:
         # Read the CSV file
-        df = pd.read_csv(file)
 
-        # Extract and parse the time_frame
-        df['time_frame'] = parse_time_frame(df['time_frame'])
-    
+        if dates_from_filenames == True:
+            df = pd.read_csv(file)
+
+            # Extract and parse the time_frame
+            df['time_frame'] = parse_time_frame(df['time_frame'])
+
+        else:
+            df = pd.read_csv(file)
+            df['time_frame'] = pd.to_datetime(df['time_frame'], format="%Y-%m-%d %H:%M:%S", errors='coerce')
+
         # Filter the DataFrame
         df_filtered = df.loc[(df['length (m)'] > 60) & (df['length (m)'] < 1940)]
         df_filtered = df_filtered.loc[(df_filtered['temperature (°C)'] > -40) & (df_filtered['temperature (°C)'] < 30)]
 
         # Extract relevant columns
         df_filtered = df_filtered[['time_frame', 'length (m)', 'temperature (°C)']]
-
+        
         # Append the filtered DataFrame to the list
         dataframes.append(df_filtered)
 
@@ -48,6 +116,16 @@ def read_and_combine_dts_files(directory):
 
     # Create the pivot table from the combined DataFrame, aggfunc takes mean if there is duplicates for time AND columns
     df_pivot = combined_df.pivot_table(index='time_frame', columns='length (m)', values='temperature (°C)', aggfunc='mean')
+
+    # Compute the most common time difference (mode of time differences)
+    time_diffs = df_pivot.index.to_series().diff().dropna()
+    most_common_freq = time_diffs.mode()[0]  # Pick the most frequent difference
+
+    # Generate a full time index using the detected frequency
+    full_time_index = pd.date_range(start=df_pivot.index.min(), end=df_pivot.index.max(), freq=most_common_freq)
+
+    # Reindex the DataFrame to include missing timestamps with NaN
+    df_pivot = df_pivot.reindex(full_time_index)
 
     return df_pivot
 
@@ -79,16 +157,15 @@ def plot_2D_dts_colormap(xr_data, meteo_df, time_slice, x_slice, vmin=None, vmax
         xr_max = np.nanmax(xr_data.sel(time=time_slice, x=x_slice)['T'].values)
         vmax = max([meteo_max, xr_max])
 
-        
     # Create subplots with adjusted spacing using constrained_layout
     fig, axes = plt.subplots(1, 4, figsize=(16, 9), gridspec_kw={'width_ratios': [3, 0.1, 0.1, 0.1]})  # Adjusted width ratios
 
     # Process the xarray dataset to get temperature as a 2D numpy array
     stream_temp_2d = xr_data.sel(time=time_slice, x=x_slice)['T'].values  # Extract the temperature data as a 2D numpy array
-
+    
     # Define the distance array based on the x_slice (assuming the x-coordinate corresponds to distance in meters)
     distance_along_stream = np.linspace(x_slice.start, x_slice.stop, len(stream_temp_2d[0]))
-
+        
     # Plot the temperature along the stream as a 2D array
     cax = axes[0].imshow(
         stream_temp_2d,  # Use the temperature 2D array
@@ -103,21 +180,26 @@ def plot_2D_dts_colormap(xr_data, meteo_df, time_slice, x_slice, vmin=None, vmax
 
     # Set y-axis with date and time formatting
     axes[0].set_yticks(np.linspace(mdates.date2num(meteo_filtered.index.min()), mdates.date2num(meteo_filtered.index.max()), num=len(meteo_filtered.index)//12))  # Set y-ticks for the time axis
-    # Manually format y-tick labels to show every 3 hours
-    if time_len <= 48:
-        freq='1H'
-    if (time_len > 48) & (time_len <= 96):
-        freq='3H'
-    if (time_len > 96) & (time_len <= 336):
-        freq='6H'
-    if (time_len > 336) & (time_len <= 1500):
-        freq='1D'
-    if (time_len > 1500) & (time_len <= 4000):
-        freq='3D'
-    if (time_len > 4000) & (time_len <= 10000):
-        freq='7D'
-    if time_len > 10000:
-        freq='1M'
+
+    meteo_freq = meteo_df.index.freq
+    if meteo_freq == '1D':
+        freq = '1D'
+    else:
+        # Manually format y-tick labels
+        if time_len <= 48:
+            freq='1H'
+        if (time_len > 48) & (time_len <= 96):
+            freq='3H'
+        if (time_len > 96) & (time_len <= 336):
+            freq='6H'
+        if (time_len > 336) & (time_len <= 1500):
+            freq='1D'
+        if (time_len > 1500) & (time_len <= 4000):
+            freq='3D'
+        if (time_len > 4000) & (time_len <= 10000):
+            freq='7D'
+        if time_len > 10000:
+            freq='1M'
     
     time_ticks = pd.date_range(start=meteo_filtered.index.min(), end=meteo_filtered.index.max(), freq=freq)
     axes[0].set_yticks(mdates.date2num(time_ticks))  # Ensure the ticks match the 3-hour intervals
