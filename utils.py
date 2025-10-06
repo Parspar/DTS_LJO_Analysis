@@ -343,16 +343,7 @@ def histogram_match(data1, data2, lims,  bins=50):
 
 
 def plot_monthly_water_temp_contour(xr_data, time_slice, x_slice, save_fp=None):
-    """
-    Make a contour-and-contour-line plot of monthly mean water temperature
-    along the stream (x) over a given time slice.
-    
-    Parameters:
-    - xr_data: xarray Dataset containing temperature data
-    - time_slice: slice object for time selection (e.g., slice('2022-01-01', '2022-12-31'))
-    - x_slice: slice object for x-coordinate selection (e.g., slice(50, 2000))
-    - save_fp: optional file path to save the plot
-    """
+
     import calendar
     
     # 1) Select the time & x-range
@@ -403,6 +394,238 @@ def plot_monthly_water_temp_contour(xr_data, time_slice, x_slice, save_fp=None):
         plt.savefig(save_fp, dpi=300, bbox_inches='tight')
     plt.show()
 
+
+# ===== DTS FEATURE EXTRACTION AND VISUALIZATION =====
+
+def load_dts_data(dts_file):
+
+    dts_data = xr.open_dataset(dts_file, engine='netcdf4')
+    dts_x = dts_data.x.values
+    
+    # Determine temperature variable name
+    if 'st' in dts_data.variables:
+        temp_var = 'st'
+    elif 'temperature' in dts_data.variables:
+        temp_var = 'temperature'
+    elif 'temp' in dts_data.variables:
+        temp_var = 'temp'
+    else:
+        temp_var = list(dts_data.data_vars.keys())[0]
+    
+    print(f"DTS loaded: {len(dts_x)} points from {dts_x.min():.1f}m to {dts_x.max():.1f}m")
+    print(f"Temperature variable: '{temp_var}'")
+    
+    return dts_data, dts_x, temp_var
+
+
+def create_burned_features(dts_x, correct_poi_distances, esker_regions=None, tolerance=25, output_file='dts_burned_features.csv', verbose=True):
+
+    
+    # Define burning values (categorical codes)
+    BURN_VALUES = {
+        'background': 0,
+        'ditch_3': 1,          # Ditch 2 Entering (630m)
+        'ditch_2': 2,          # Ditch 1 Entering (700m)
+        'ditch_1': 4,          # Tributary entering area (1470m)
+        'upland_spring': 8,    # Upland Spring 2 (1860m)
+        'upland': 16,          # Upstream spring (1890m)
+        'esker_1': 32,         # Episodic ditch (380-450m)
+        'esker_2': 64,         # Esker region (1000-1300m)
+    }
+    
+    # Initialize burned vector
+    burned_vector = pd.DataFrame({
+        'x_dts': dts_x,
+        'burned_features': 0
+    })
+    
+    if verbose:
+        print("Burning POI features into vector...")
+    
+    # Burn POI features
+    for feature_type, stream_distance in correct_poi_distances.items():
+        if feature_type not in BURN_VALUES:
+            continue
+            
+        # Find DTS points near this stream distance
+        distances = np.abs(dts_x - stream_distance)
+        nearby_indices = np.where(distances <= tolerance)[0]
+        
+        if len(nearby_indices) > 0:
+            burned_vector.loc[nearby_indices, 'burned_features'] = BURN_VALUES[feature_type]
+            if verbose:
+                print(f"   Burned {feature_type} at {stream_distance}m: {len(nearby_indices)} points")
+    
+    # Burn esker regions if provided
+    if esker_regions:
+        if verbose:
+            print("Burning esker regions...")
+        for esker_name, (start, end) in esker_regions.items():
+            if esker_name not in BURN_VALUES:
+                continue
+                
+            esker_mask = (dts_x >= start) & (dts_x <= end)
+            esker_indices = np.where(esker_mask)[0]
+            
+            if len(esker_indices) > 0:
+                # Only burn if not already occupied by a POI feature
+                available_indices = esker_indices[burned_vector.loc[esker_indices, 'burned_features'] == 0]
+                if len(available_indices) > 0:
+                    burned_vector.loc[available_indices, 'burned_features'] = BURN_VALUES[esker_name]
+                    if verbose:
+                        print(f"   Burned {esker_name} ({start}-{end}m): {len(available_indices)} points")
+    
+    # Summary
+    if verbose:
+        unique_values = burned_vector['burned_features'].unique()
+        print(f"\nBurned Vector Summary:")
+        print(f"   Unique values: {sorted(unique_values)}")
+    
+    # Save
+    burned_vector.to_csv(output_file, index=False)
+    if verbose:
+        print(f"Saved: {output_file}\n")
+    
+    return burned_vector
+
+
+def plot_temperature_with_features(dts_data, dates, start_hour=0, end_hour=3, 
+                                   burned_features_file='dts_burned_features.csv',
+                                   xlim=(0, 2000), ylim=(4, 13.2),
+                                   figsize=(14, 9), save_fp=None):
+       
+    # Determine temperature variable
+    if 'st' in dts_data.variables:
+        temp_var = 'st'
+    elif 'temperature' in dts_data.variables:
+        temp_var = 'temperature'
+    elif 'temp' in dts_data.variables:
+        temp_var = 'temp'
+    else:
+        temp_var = list(dts_data.data_vars.keys())[0]
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Load and plot burned features as background
+    feature_patches = []
+    feature_labels_list = []
+    
+    try:
+        burned_features = pd.read_csv(burned_features_file)
+        
+        FEATURE_COLORS = {
+            1: '#2F2F2F',   # Ditch inflow 1 (630m)
+            2: '#2F2F2F',   # Ditch inflow 2 (700m)
+            4: '#2F2F2F',   # Tributary entering area (1470m)
+            8: '#2F2F2F',   # Upland Spring 2 (1860m)
+            16: '#2F2F2F',  # Upstream spring (1900m)
+            32: '#2F2F2F',  # Episodic ditch (380-450m)
+            64: '#2F2F2F',  # Esker region (1000-1300m)
+        }
+        
+        FEATURE_LABELS = {
+            1: 'Ditch inflow 1 (630m)',
+            2: 'Ditch inflow 2 (700m)',
+            4: 'Tributary (1470m)',
+            8: 'Upland Spring 2 (1860m)',
+            16: 'Upstream spring (1890m)',
+            32: 'Episodic ditch (380-450m)',
+            64: 'Esker region (1000-1300m)'
+        }
+        
+        print("Adding burned stream features as background...")
+        for feature_value, color in FEATURE_COLORS.items():
+            feature_mask = burned_features['burned_features'] == feature_value
+            if feature_mask.sum() > 0:
+                feature_x = burned_features.loc[feature_mask, 'x_dts'].values
+                min_x, max_x = feature_x.min(), feature_x.max()
+                patch = ax.axvspan(min_x, max_x, color=color, alpha=0.12, zorder=0)
+                
+                # Store for legend
+                feature_patches.append(patch)
+                feature_labels_list.append(FEATURE_LABELS.get(feature_value, f"Feature {feature_value}"))
+    
+        
+    except FileNotFoundError:
+        print(f"Warning: Burned features file '{burned_features_file}' not found. Skipping feature backgrounds.")
+    except Exception as e:
+        print(f"Warning: Error loading burned features: {e}")
+    
+    # Generate colors for dates
+    n_dates = len(dates)
+    if n_dates > 0:
+        colors = sns.color_palette("coolwarm_r", n_dates)
+    
+    # Plot temperature for each date
+    print(f"\nPlotting temperatures for {n_dates} dates...")
+    for i, date in enumerate(dates):
+        try:
+            time_slice = slice(f"{date}T{start_hour:02d}:00:00", f"{date}T{end_hour:02d}:59:59")
+            selected_data = dts_data.sel(time=time_slice)
+            mean_temp = selected_data[temp_var].mean(dim='time')
+            
+            ax.plot(dts_data.x.values, mean_temp.values,
+                   color=colors[i],
+                   marker='o',
+                   markersize=9,
+                   markeredgecolor='black',
+                   markeredgewidth=1,
+                   linewidth=0,
+                   label=f'{date}')
+            
+            print(f"   {date}: {mean_temp.min().values:.2f}°C to {mean_temp.max().values:.2f}°C")
+            
+        except Exception as e:
+            print(f"   Warning: Error plotting {date}: {e}")
+    
+    # Styling
+    ax.set_xlabel('X, Distance Along Stream (m)', fontsize=26, fontfamily='Arial')
+    ax.set_ylabel('Nocturnal Mean $S_t$ (°C)', fontsize=26, fontfamily='Arial')
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.tick_params(axis='x', labelsize=26, length=6, width=1)
+    ax.tick_params(axis='y', labelsize=26, length=6, width=1)
+    
+    # Set tick labels to Arial
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontfamily('Arial')
+        label.set_fontsize(26)
+    
+    # Remove top and right spines
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.xaxis.set_ticks_position('bottom')
+    ax.yaxis.set_ticks_position('left')
+    ax.grid(False)
+    
+    # Create combined legend with dates and features
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.35)  # More space for two-row legend
+    
+    # Get date handles and labels
+    date_handles, date_labels = ax.get_legend_handles_labels()
+    
+    # Combine with feature handles and labels
+    all_handles = date_handles + feature_patches
+    all_labels = date_labels + feature_labels_list
+    
+    # Create legend with two rows: dates on top, features on bottom
+    legend = ax.legend(all_handles, all_labels, 
+                      frameon=False, 
+                      loc='upper center',
+                      bbox_to_anchor=(0.5, -0.12), 
+                      ncol=4,  # 4 columns to fit better
+                      fontsize=20,
+                      prop={'family': 'Arial', 'size': 20},
+                      columnspacing=1.5)
+    
+    if save_fp:
+        plt.savefig(save_fp, dpi=300, bbox_inches='tight')
+        print(f"\nFigure saved: {save_fp}")
+    
+    plt.show()
+    
 
 
 
