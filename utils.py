@@ -169,7 +169,7 @@ def plot_2D_dts_colormap(xr_data, meteo_df, time_slice, x_slice, vmin=None, vmax
     # Plot the temperature along the stream as a 2D array
     cax = axes[0].imshow(
         stream_temp_2d,  # Use the temperature 2D array
-        aspect='auto',  # Stretch to fit
+        aspect='auto',  
         cmap='RdYlBu_r', vmin=vmin, vmax=vmax,
         extent=[distance_along_stream.min(), distance_along_stream.max(), mdates.date2num(meteo_filtered.index.max()), mdates.date2num(meteo_filtered.index.min())]  # Adjusted to place time on y-axis
     )
@@ -219,7 +219,7 @@ def plot_2D_dts_colormap(xr_data, meteo_df, time_slice, x_slice, vmin=None, vmax
     # Plot the mean temperature along the x-dimension as a 2D strip
     axes[1].imshow(
         mean_temp_2d,  # Use the mean temperature 2D array
-        aspect='auto',  # Stretch to fit
+        aspect='auto',  
         cmap='RdYlBu_r', vmin=vmin, vmax=vmax,
         extent=[0, 1, mdates.date2num(meteo_filtered.index.max()), mdates.date2num(meteo_filtered.index.min())]  # Adjusted to place time on y-axis
     )
@@ -340,6 +340,68 @@ def histogram_match(data1, data2, lims,  bins=50):
     gamma = round(np.sum(minima)/np.sum(hobs),2)
     
     return gamma
+
+
+def plot_monthly_water_temp_contour(xr_data, time_slice, x_slice, save_fp=None):
+    """
+    Make a contour-and-contour-line plot of monthly mean water temperature
+    along the stream (x) over a given time slice.
+    
+    Parameters:
+    - xr_data: xarray Dataset containing temperature data
+    - time_slice: slice object for time selection (e.g., slice('2022-01-01', '2022-12-31'))
+    - x_slice: slice object for x-coordinate selection (e.g., slice(50, 2000))
+    - save_fp: optional file path to save the plot
+    """
+    import calendar
+    
+    # 1) Select the time & x-range
+    T = xr_data['T'].sel(time=time_slice, x=x_slice)
+
+    # 2) Group by calendar month and average over time
+    #    Result dims: (month=1..12, x)
+    T_monthly = T.groupby('time.month').mean(dim='time')
+
+    # 3) Extract the numeric arrays for plotting
+    months = T_monthly['month'].values                # [1,2,…,12]
+    x_pos  = T_monthly['x'].values                    # e.g. 50…2000
+    Z      = T_monthly.values                         # shape (12, N_x)
+
+    # 4) Build the grid
+    M, X = np.meshgrid(months, x_pos, indexing='xy')  # X: x_pos×month
+
+    # 5) Plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Filled contours
+    cf = ax.contourf(M, X, Z.T, levels=20, cmap='RdBu_r', extend='both')
+    # Overlay contour lines
+    cs = ax.contour(M, X, Z.T, levels=10, colors='k', linewidths=0.5)
+    ax.clabel(cs, fmt='%1.1f', fontsize=12)
+
+    # Colorbar
+    cbar = fig.colorbar(cf, ax=ax, orientation='vertical', pad=0.02)
+    cbar.set_label(r'$T_w$ (°C)', fontsize=12)
+
+    # 6) Format axes
+    ax.set_xlabel('Year-2022', fontsize=12)
+    ax.set_ylabel('X, Distance Along Stream (m)', fontsize=12)
+
+    # Replace month numbers with names
+    ax.set_xticks(months)
+    ax.set_xticklabels([calendar.month_abbr[m] for m in months], fontsize=12)
+
+    # Add a grid
+    ax.grid(True, linestyle='--', alpha=0.4)
+
+    # Title
+    start, stop = pd.to_datetime(time_slice.start), pd.to_datetime(time_slice.stop)
+    # ax.set_title('Monthly Mean Stream Temperature', fontsize=12)
+
+    plt.tight_layout()
+    if save_fp:
+        plt.savefig(save_fp, dpi=300, bbox_inches='tight')
+    plt.show()
 
 
 
