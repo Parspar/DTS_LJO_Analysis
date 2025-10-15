@@ -1,0 +1,8 @@
+feature_type,feature_name,input_lat,input_lon,stream_distance_m,distance_start_m,distance_end_m,calculation_method,notes
+poi,ditch_3,7544833.8,383605.2,630,,,GPS_projection_to_stream,"Field GPS coordinates projected onto stream network in GIS"
+poi,ditch_2,7544752.9,383693.5,700,,,GPS_projection_to_stream,"Field GPS coordinates projected onto stream network in GIS"
+poi,ditch_1,7544242.4,383812.0,1470,,,GPS_projection_to_stream,"Field GPS coordinates projected onto stream network in GIS"
+poi,upland,7543888.6,383914.4,1890,,,GPS_projection_to_stream,"Field GPS coordinates projected onto stream network in GIS"
+region,esker_1,,,,380,450,DEM_geomorphology,"Episodic ditch region identified from DEM elevation and slope"
+region,esker_2,,,,1000,1300,DEM_geology,"Esker region identified from DEM and geological maps"
+
